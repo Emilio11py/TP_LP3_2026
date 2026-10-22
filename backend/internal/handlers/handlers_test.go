@@ -145,6 +145,11 @@ func TestRequestLifecycle(t *testing.T) {
 func TestAuthenticationAndCORS(t *testing.T) {
 	handler := New(testDB(t), "http://localhost:4200")
 
+	documentLogin := call(handler, http.MethodPost, "/api/auth/login", "",
+		`{"nro_cedula":"1001","contrasenha":"student-password"}`, "")
+	if documentLogin.Code != http.StatusOK || !strings.Contains(documentLogin.Body.String(), `"nro_cedula":1001`) {
+		t.Fatalf("document login response = %d, %s", documentLogin.Code, documentLogin.Body.String())
+	}
 	unauthorized := call(handler, http.MethodGet, "/api/solicitudes", "", "", "")
 	if unauthorized.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated request status = %d, want 401", unauthorized.Code)

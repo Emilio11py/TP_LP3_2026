@@ -89,24 +89,42 @@ func (a *App) health(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	var input struct {
+		NroCedula   string `json:"nro_cedula"`
 		Email       string `json:"email"`
 		Contrasenha string `json:"contrasenha"`
 	}
-	if err := decodeJSON(w, r, &input, 1<<20); err != nil ||
-		strings.TrimSpace(input.Email) == "" || len(input.Email) > 120 ||
+	if err := decodeJSON(w, r, &input, 1<<20); err != nil {
+		writeError(w, http.StatusBadRequest, "Solicitud de inicio de sesión inválida")
+		return
+	}
+	nroCedula := strings.TrimSpace(input.NroCedula)
+	email := strings.TrimSpace(input.Email)
+	if (nroCedula == "") == (email == "") ||
+		len(nroCedula) > 120 || len(email) > 120 ||
 		input.Contrasenha == "" || len(input.Contrasenha) > 256 {
-		writeError(w, http.StatusBadRequest, "Email y contraseña son obligatorios")
+		writeError(w, http.StatusBadRequest, "Ingrese un número de documento o email y una contraseña")
 		return
 	}
 
 	var user models.Usuario
 	var storedPassword string
-	err := a.DB.QueryRowContext(r.Context(), `
+	query := `
 		SELECT ID_USUARIO, NRO_CEDULA, NOMBRES, APELLIDOS, CODIGO_MATRICULA,
 		       EMAIL, TELEFONO_CELULAR, CONTRASENHA, ROLE_ACCESO, CARRERA, ACTIVO
 		FROM USUARIOS
 		WHERE LOWER(EMAIL) = LOWER(?) AND ACTIVO = 1
-	`, strings.TrimSpace(input.Email)).Scan(
+	`
+	identifier := email
+	if nroCedula != "" {
+		query = `
+			SELECT ID_USUARIO, NRO_CEDULA, NOMBRES, APELLIDOS, CODIGO_MATRICULA,
+			       EMAIL, TELEFONO_CELULAR, CONTRASENHA, ROLE_ACCESO, CARRERA, ACTIVO
+			FROM USUARIOS
+			WHERE CAST(NRO_CEDULA AS TEXT) = ? AND ACTIVO = 1
+		`
+		identifier = nroCedula
+	}
+	err := a.DB.QueryRowContext(r.Context(), query, identifier).Scan(
 		&user.IDUsuario, &user.NroCedula, &user.Nombres, &user.Apellidos,
 		&user.CodigoMatricula, &user.Email, &user.TelefonoCelular,
 		&storedPassword, &user.RoleAcceso, &user.Carrera, &user.Activo,

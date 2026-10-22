@@ -1,0 +1,213 @@
+<main class="page-shell">
+  @if (auth.usuarioActual(); as usuario) {
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="Inicio">
+        <span class="brand-mark">CAE</span>
+        <span class="brand-name">Sistema CAE</span>
+      </a>
+      <nav class="main-nav" aria-label="Navegación principal">
+        <button
+          type="button"
+          [class.active]="seccion === 'usuario'"
+          [attr.aria-current]="seccion === 'usuario' ? 'page' : null"
+          (click)="seccion = 'usuario'"
+        >
+          Usuario
+        </button>
+        <button
+          type="button"
+          [class.active]="seccion === 'estudiante'"
+          [attr.aria-current]="seccion === 'estudiante' ? 'page' : null"
+          (click)="seccion = 'estudiante'"
+        >
+          Panel del Estudiante
+        </button>
+        <button
+          type="button"
+          [class.active]="seccion === 'administrativo'"
+          [attr.aria-current]="seccion === 'administrativo' ? 'page' : null"
+          (click)="seccion = 'administrativo'"
+        >
+          Panel Administrativo
+        </button>
+      </nav>
+      <div class="account-actions">
+        <span class="account-name">{{ nombreCompleto(usuario) }}</span>
+        <button class="logout-button" type="button" (click)="cerrarSesion()" [disabled]="cargando">
+          Cerrar sesión
+        </button>
+      </div>
+    </header>
+
+    <section class="dashboard content-width">
+      @if (mensajeError) {
+        <p class="form-message error-message" role="alert">{{ mensajeError }}</p>
+      }
+      @if (seccion === 'usuario') {
+        <div class="welcome-card">
+          <p class="eyebrow">MENÚ PRINCIPAL</p>
+          <h1>¡Hola, {{ usuario.nombres }}!</h1>
+          <p>Bienvenido al Sistema de Créditos de Actividades Extracurriculares.</p>
+        </div>
+        <section class="panel profile-panel" aria-labelledby="profile-title">
+          <div>
+            <p class="eyebrow">MI CUENTA</p>
+            <h2 id="profile-title">Datos del usuario</h2>
+          </div>
+          <dl class="profile-grid">
+            <div><dt>Número de documento</dt><dd>{{ usuario.nro_cedula }}</dd></div>
+            <div><dt>Matrícula</dt><dd>{{ usuario.codigo_matricula }}</dd></div>
+            <div><dt>Nombre completo</dt><dd>{{ nombreCompleto(usuario) }}</dd></div>
+            <div><dt>Correo electrónico</dt><dd>{{ usuario.email }}</dd></div>
+            <div><dt>Carrera</dt><dd>{{ usuario.carrera }}</dd></div>
+            <div><dt>Tipo de usuario</dt><dd>{{ usuario.role_acceso }}</dd></div>
+          </dl>
+        </section>
+      } @else if (seccion === 'estudiante') {
+        <section class="panel feature-panel">
+          <p class="eyebrow">ÁREA DEL ESTUDIANTE</p>
+          <h1>Panel del Estudiante</h1>
+          <p>Desde aquí podrás acceder a tus actividades y solicitudes CAE.</p>
+          <p class="coming-soon">Las funciones de este panel se agregarán en la siguiente etapa.</p>
+        </section>
+      } @else {
+        <section class="panel feature-panel">
+          <p class="eyebrow">GESTIÓN DEL SISTEMA</p>
+          <h1>Panel Administrativo</h1>
+          <p>Este espacio estará destinado a la revisión y administración de solicitudes.</p>
+          <p class="coming-soon">Las funciones administrativas se agregarán en la siguiente etapa.</p>
+        </section>
+      }
+    </section>
+  } @else {
+    <section class="auth-layout" aria-label="Acceso al Sistema CAE">
+      <aside class="intro-panel">
+        <a class="brand brand-light" href="#" aria-label="Sistema CAE">
+          <span class="brand-mark">CAE</span>
+          <span class="brand-name">Sistema CAE</span>
+        </a>
+        <div class="intro-copy">
+          <p class="eyebrow">CRÉDITOS DE ACTIVIDADES EXTRACURRICULARES</p>
+          <h1>Tu esfuerzo también suma.</h1>
+          <p>Ingresa a tu cuenta para continuar con tus actividades y solicitudes.</p>
+        </div>
+        <span class="intro-decoration" aria-hidden="true"></span>
+      </aside>
+
+      <section class="auth-panel">
+        <div class="auth-card">
+          <div class="auth-heading">
+            <p class="eyebrow">BIENVENIDO/A</p>
+            <h2>Accede a tu cuenta</h2>
+            <p>Ingresa tus datos para continuar.</p>
+          </div>
+
+          <div class="auth-tabs" role="tablist" aria-label="Opciones de acceso">
+            <button
+              id="login-tab"
+              type="button"
+              role="tab"
+              [attr.aria-selected]="pestana === 'ingresar'"
+              [class.active]="pestana === 'ingresar'"
+              (click)="seleccionarPestana('ingresar')"
+            >
+              Iniciar sesión
+            </button>
+            <button
+              id="register-tab"
+              type="button"
+              role="tab"
+              [attr.aria-selected]="pestana === 'registrarme'"
+              [class.active]="pestana === 'registrarme'"
+              (click)="seleccionarPestana('registrarme')"
+            >
+              Registrarme
+            </button>
+          </div>
+
+          @if (pestana === 'ingresar') {
+            <form class="auth-form" (ngSubmit)="ingresar()">
+              <label for="nro-cedula">Nro. de documento</label>
+              <input
+                id="nro-cedula"
+                name="nroCedula"
+                type="text"
+                inputmode="numeric"
+                autocomplete="username"
+                placeholder="Ingresa tu número de documento"
+                [(ngModel)]="nroCedula"
+                required
+              />
+
+              <label for="contrasenha">Contraseña</label>
+              <div class="password-field">
+                <input
+                  id="contrasenha"
+                  name="contrasenha"
+                  [type]="mostrarContrasenha ? 'text' : 'password'"
+                  autocomplete="current-password"
+                  placeholder="Ingresa tu contraseña"
+                  [(ngModel)]="contrasenha"
+                  required
+                />
+                <button
+                  class="visibility-button"
+                  type="button"
+                  [attr.aria-label]="mostrarContrasenha ? 'Ocultar contraseña' : 'Mostrar contraseña'"
+                  [attr.aria-pressed]="mostrarContrasenha"
+                  (click)="mostrarContrasenha = !mostrarContrasenha"
+                >
+                  @if (mostrarContrasenha) {
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M3 3l18 18M10.6 10.6a2 2 0 002.8 2.8M9.9 5.2A10.7 10.7 0 0112 5c5.5 0 9 7 9 7a15.8 15.8 0 01-3.2 3.9M6.2 6.2C3.9 7.7 3 12 3 12s3.5 7 9 7a10.4 10.4 0 004.2-.9" />
+                    </svg>
+                  } @else {
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M3 12s3.5-7 9-7 9 7 9 7-3.5 7-9 7-9-7-9-7z" />
+                      <circle cx="12" cy="12" r="2.5" />
+                    </svg>
+                  }
+                </button>
+              </div>
+
+              @if (mensajeError) {
+                <p class="form-message error-message" role="alert">{{ mensajeError }}</p>
+              }
+
+              <button class="primary-button" type="submit" [disabled]="cargando">
+                {{ cargando ? 'Ingresando...' : 'Ingresar' }}
+              </button>
+            </form>
+          } @else {
+            <form class="auth-form" (ngSubmit)="$event.preventDefault()">
+              <label for="registro-documento">Nro. de documento</label>
+              <input
+                id="registro-documento"
+                name="registroDocumento"
+                type="text"
+                inputmode="numeric"
+                placeholder="Ingresa tu número de documento"
+                required
+              />
+              <label for="matricula">Matrícula</label>
+              <input
+                id="matricula"
+                name="matricula"
+                type="text"
+                placeholder="Ingresa tu matrícula"
+                [(ngModel)]="matricula"
+                required
+              />
+              <p class="form-message">{{ mensajeRegistro }}</p>
+              <button class="primary-button" type="button" disabled>Registrarme</button>
+            </form>
+          }
+
+          @if (cargando && !auth.usuarioActual()) {
+            <p class="loading-message" role="status">Verificando sesión...</p>
+          }
+        </div>
+      </section>
+    </section>
+  }
+</main>
