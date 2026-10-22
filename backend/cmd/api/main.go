@@ -1,32 +1,62 @@
 package main
 
 import (
-	"fmt"
+	"context"
+	"errors"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
 
 	"tp-backend/internal/handlers"
 	"tp-backend/internal/services"
 )
 
 func main() {
-	// 1. Conectar a la base de datos oficial
-	services.InicializarDB("data/sistema_cae.db")
+	databasePath := envOrDefault("DB_PATH", "data/sistema_cae.db")
+	db, err := services.OpenDB(context.Background(), databasePath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+	if err := services.ValidateSchema(context.Background(), db); err != nil {
+		log.Fatal(err)
+	}
 
-	// 2. Endpoints
-	http.HandleFunc("/api/auth/login", handlers.LoginUsuario)
-	http.HandleFunc("/api/solicitudes", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			handlers.ListarSolicitudes(w, r)
-		case http.MethodPost:
-			handlers.CrearSolicitud(w, r)
-		default:
-			http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+	server := &http.Server{
+		Addr:              ":" + strings.TrimPrefix(envOrDefault("PORT", "8080"), ":"),
+		Handler:           handlers.New(db, envOrDefault("FRONTEND_ORIGIN", "http://localhost:4200")),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	serverErrors := make(chan error, 1)
+	go func() {
+		log.Printf("API disponible en http://localhost%s", server.Addr)
+		serverErrors <- server.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serverErrors:
+		if !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("Error del servidor: %v", err)
 		}
-	})
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("Error al cerrar el servidor: %v", err)
+		}
+	}
+}
 
-	fmt.Println("Servidor Go corriendo en http://localhost:8080...")
-	log.Fatal(http.ListenAndServe(":8080", nil))
-
+func envOrDefault(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return fallback
 }

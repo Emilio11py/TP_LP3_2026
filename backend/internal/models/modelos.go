@@ -9,7 +9,7 @@ type Usuario struct {
 	CodigoMatricula string `json:"codigo_matricula"`
 	Email           string `json:"email"`
 	TelefonoCelular string `json:"telefono_celular"`
-	Contrasenha     string `json:"contrasenha,omitempty"`
+	Contrasenha     string `json:"-"`
 	RoleAcceso      string `json:"role_acceso"` // 'ESTUDIANTE', 'DIR_ACADEMICA', 'DIR_CARRERA'
 	Carrera         string `json:"carrera"`
 	Activo          int    `json:"activo"`
@@ -34,4 +34,7 @@ type SolicitudCAE struct {
 	ActividadNombre     string  `json:"actividad_nombre,omitempty"`
 	CargaHorariaMinutos int     `json:"carga_horaria_en_minutos,omitempty"`
 	CreditosCalculados  float64 `json:"creditos_calculados,omitempty"`
+	FechaActividad      string  `json:"fecha_actividad"`
+	SolicitanteNombre   string  `json:"solicitante_nombre"`
+	SolicitanteEmail    string  `json:"solicitante_email"`
 }
