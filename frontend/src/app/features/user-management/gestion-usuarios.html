@@ -1,0 +1,230 @@
+<section class="user-management">
+  <div class="management-heading">
+    <div>
+      <p class="eyebrow">ADMINISTRACIÓN</p>
+      <h1>Gestión de Usuarios</h1>
+      <p>Administra las cuentas y revisa las solicitudes de registro.</p>
+    </div>
+    <div class="management-actions">
+      <button class="secondary-button" type="button" (click)="abrirSolicitudes()">
+        Solicitudes pendientes
+        <span class="badge">{{ cantidadPendiente }}</span>
+      </button>
+      <button class="primary-button compact-button" type="button" (click)="abrirCrear()">
+        Crear usuario
+      </button>
+    </div>
+  </div>
+
+  @if (mensaje) {
+    <p class="management-message" [class.error-message]="tipoMensaje === 'error'" role="status">
+      {{ mensaje }}
+    </p>
+  }
+
+  @if (crearAbierto) {
+    <section class="management-card edit-card" aria-labelledby="create-user-title">
+      <h2 id="create-user-title">Crear usuario</h2>
+      <form class="user-form" (ngSubmit)="guardarNuevo()">
+        <label>Nro. de documento<input name="nuevoDocumento" type="text" inputmode="numeric" [(ngModel)]="nuevoUsuario.nro_cedula" required /></label>
+        <label>Nombres<input name="nuevoNombre" type="text" [(ngModel)]="nuevoUsuario.nombres" required /></label>
+        <label>Apellidos<input name="nuevoApellido" type="text" [(ngModel)]="nuevoUsuario.apellidos" required /></label>
+        <label>Matrícula<input name="nuevaMatricula" type="text" [(ngModel)]="nuevoUsuario.codigo_matricula" required /></label>
+        <label>Correo electrónico<input name="nuevoEmail" type="email" [(ngModel)]="nuevoUsuario.email" required /></label>
+        <label>Teléfono celular<input name="nuevoTelefono" type="tel" [(ngModel)]="nuevoUsuario.telefono_celular" required /></label>
+        <label>Contraseña
+          <span class="user-password-field">
+            <input name="nuevaContrasenha" [type]="mostrarContrasenhaNueva ? 'text' : 'password'" [(ngModel)]="nuevoUsuario.contrasenha" minlength="8" required />
+            <button class="user-visibility-button" type="button" [attr.aria-label]="mostrarContrasenhaNueva ? 'Ocultar contraseña' : 'Mostrar contraseña'" [attr.aria-pressed]="mostrarContrasenhaNueva" (click)="mostrarContrasenhaNueva = !mostrarContrasenhaNueva">
+              @if (mostrarContrasenhaNueva) {
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18M10.6 10.6a2 2 0 002.8 2.8M9.9 5.2A10.7 10.7 0 0112 5c5.5 0 9 7 9 7a15.8 15.8 0 01-3.2 3.9M6.2 6.2C3.9 7.7 3 12 3 12s3.5 7 9 7a10.4 10.4 0 004.2-.9" /></svg>
+              } @else {
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12s3.5-7 9-7 9 7 9 7-3.5 7-9 7-9-7-9-7z" /><circle cx="12" cy="12" r="2.5" /></svg>
+              }
+            </button>
+          </span>
+        </label>
+        <label>Rol
+          <select name="nuevoRol" [(ngModel)]="nuevoUsuario.role_acceso">
+            <option value="estudiante">Estudiante</option>
+            <option value="dir_academica">Dirección Académica</option>
+            <option value="dir_carrera">Dirección de Carrera</option>
+          </select>
+        </label>
+        <label>Carrera
+          <select name="nuevaCarrera" [(ngModel)]="nuevoUsuario.carrera" required>
+            <option value="" disabled>Selecciona una carrera</option>
+            <option value="Ing. Informática">Ing. Informática</option>
+            <option value="Ing. Química">Ing. Química</option>
+            <option value="Ing. Industrial">Ing. Industrial</option>
+          </select>
+        </label>
+        <label>Estado
+          <select name="nuevoActivo" [(ngModel)]="nuevoUsuario.activo">
+            <option [ngValue]="1">Activo</option>
+            <option [ngValue]="0">Inactivo</option>
+          </select>
+        </label>
+        <div class="form-actions">
+          <button class="primary-button compact-button" type="submit" [disabled]="cargando">
+            Guardar
+          </button>
+          <button class="secondary-button" type="button" (click)="cancelarCrear()">Cancelar</button>
+        </div>
+      </form>
+    </section>
+  }
+
+  @if (editandoId && usuarioEditado) {
+    <section class="management-card edit-card" aria-labelledby="edit-user-title">
+      <h2 id="edit-user-title">Modificar usuario</h2>
+      <form class="user-form" (ngSubmit)="guardarEdicion()">
+        <label>Nro. de documento<input name="editarDocumento" type="text" inputmode="numeric" [(ngModel)]="usuarioEditado.nro_cedula" required /></label>
+        <label>Nombres<input name="editarNombre" type="text" [(ngModel)]="usuarioEditado.nombres" required /></label>
+        <label>Apellidos<input name="editarApellido" type="text" [(ngModel)]="usuarioEditado.apellidos" required /></label>
+        <label>Matrícula<input name="editarMatricula" type="text" [(ngModel)]="usuarioEditado.codigo_matricula" required /></label>
+        <label>Correo electrónico<input name="editarEmail" type="email" [(ngModel)]="usuarioEditado.email" required /></label>
+        <label>Teléfono celular<input name="editarTelefono" type="tel" [(ngModel)]="usuarioEditado.telefono_celular" required /></label>
+        <label>Nueva contraseña
+          <span class="user-password-field">
+            <input name="editarContrasenha" [type]="mostrarContrasenhaEdicion ? 'text' : 'password'" [(ngModel)]="usuarioEditado.contrasenha" minlength="8" placeholder="Dejar vacío para conservarla" />
+            <button class="user-visibility-button" type="button" [attr.aria-label]="mostrarContrasenhaEdicion ? 'Ocultar contraseña' : 'Mostrar contraseña'" [attr.aria-pressed]="mostrarContrasenhaEdicion" (click)="mostrarContrasenhaEdicion = !mostrarContrasenhaEdicion">
+              @if (mostrarContrasenhaEdicion) {
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18M10.6 10.6a2 2 0 002.8 2.8M9.9 5.2A10.7 10.7 0 0112 5c5.5 0 9 7 9 7a15.8 15.8 0 01-3.2 3.9M6.2 6.2C3.9 7.7 3 12 3 12s3.5 7 9 7a10.4 10.4 0 004.2-.9" /></svg>
+              } @else {
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12s3.5-7 9-7 9 7 9 7-3.5 7-9 7-9-7-9-7z" /><circle cx="12" cy="12" r="2.5" /></svg>
+              }
+            </button>
+          </span>
+        </label>
+        <label>Rol
+          <select name="editarRol" [(ngModel)]="usuarioEditado.role_acceso">
+            <option value="estudiante">Estudiante</option>
+            <option value="dir_academica">Dirección Académica</option>
+            <option value="dir_carrera">Dirección de Carrera</option>
+          </select>
+        </label>
+        <label>Carrera
+          <select name="editarCarrera" [(ngModel)]="usuarioEditado.carrera" required>
+            <option value="" disabled>Selecciona una carrera</option>
+            <option value="Ing. Informática">Ing. Informática</option>
+            <option value="Ing. Química">Ing. Química</option>
+            <option value="Ing. Industrial">Ing. Industrial</option>
+          </select>
+        </label>
+        <label>Estado
+          <select name="editarActivo" [(ngModel)]="usuarioEditado.activo">
+            <option [ngValue]="1">Activo</option>
+            <option [ngValue]="0">Inactivo</option>
+          </select>
+        </label>
+        <div class="form-actions">
+          <button class="primary-button compact-button" type="submit" [disabled]="cargando">Guardar cambios</button>
+          <button class="secondary-button" type="button" (click)="cancelarEdicion()">Cancelar</button>
+          <button
+            class="danger-button"
+            type="button"
+            [disabled]="cargando"
+            (click)="eliminarEditado()"
+          >
+            Eliminar usuario
+          </button>
+        </div>
+      </form>
+    </section>
+  }
+
+  @if (pendientesAbiertos) {
+    <section class="management-card pending-card" aria-labelledby="pending-title">
+      <div class="card-heading">
+        <div>
+          <h2 id="pending-title">Solicitudes de registro</h2>
+          <p>Verifica los datos con la información oficial de la facultad antes de decidir.</p>
+        </div>
+        <button class="text-button" type="button" (click)="cerrarSolicitudes()">Cerrar</button>
+      </div>
+      @if (cargandoSolicitudes) {
+        <p class="empty-message" role="status">Cargando solicitudes pendientes...</p>
+      } @else if (solicitudes.length === 0) {
+        <p class="empty-message">Todavía no hay solicitudes de registro.</p>
+      } @else {
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Documento</th><th>Nombre</th><th>Matrícula</th><th>Correo</th>
+                <th>Teléfono</th><th>Carrera</th><th>Solicitud</th><th>Estado</th><th>Acción</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (solicitud of solicitudes; track solicitud.id) {
+                <tr [class.row-approved]="solicitud.estado === 'APROBADO'" [class.row-rejected]="solicitud.estado === 'RECHAZADO'">
+                  <td>{{ solicitud.nro_cedula }}</td>
+                  <td>{{ nombreCompleto(solicitud) }}</td>
+                  <td>{{ solicitud.codigo_matricula }}</td>
+                  <td>{{ solicitud.email }}</td>
+                  <td>{{ solicitud.telefono_celular }}</td>
+                  <td>{{ solicitud.carrera }}</td>
+                  <td>{{ solicitud.fecha_solicitud | date:'short' }}</td>
+                  <td><span class="status-chip" [class]="solicitud.estado.toLowerCase()">{{ solicitud.estado }}</span></td>
+                  <td class="decision-actions">
+                    @if (solicitud.estado === 'PENDIENTE') {
+                      <button class="icon-button accept-button" type="button" aria-label="Aceptar solicitud" (click)="cambiarEstado(solicitud, 'APROBADO')">✓</button>
+                      <button class="icon-button reject-button" type="button" aria-label="Rechazar solicitud" (click)="cambiarEstado(solicitud, 'RECHAZADO')">×</button>
+                    } @else if (solicitud.estado === 'RECHAZADO') {
+                      <button class="secondary-button small-button" type="button" (click)="cambiarEstado(solicitud, 'PENDIENTE')">Volver a pendiente</button>
+                    } @else {
+                      <span class="decision-by">{{ solicitud.revisor_nombre }}</span>
+                    }
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+    </section>
+  }
+
+  <section class="management-card users-card" aria-labelledby="users-title">
+    <div class="card-heading">
+      <div>
+        <h2 id="users-title">Usuarios existentes</h2>
+        <p>{{ usuarios.length }} usuario(s) registrados</p>
+      </div>
+    </div>
+    @if (cargandoUsuarios) {
+      <p class="empty-message" role="status">Cargando usuarios de la base de datos...</p>
+    } @else if (usuarios.length === 0) {
+      <p class="empty-message">No se encontraron usuarios.</p>
+    } @else {
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th><th>Documento</th><th>Nombres</th><th>Apellidos</th><th>Matrícula</th>
+              <th>Correo</th><th>Teléfono</th><th>Rol</th><th>Carrera</th><th>Activo</th><th>Acción</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (usuario of usuarios; track usuario.id_usuario) {
+              <tr>
+                <td>{{ usuario.id_usuario }}</td>
+                <td>{{ usuario.nro_cedula }}</td>
+                <td>{{ usuario.nombres }}</td>
+                <td>{{ usuario.apellidos }}</td>
+                <td>{{ usuario.codigo_matricula }}</td>
+                <td>{{ usuario.email }}</td>
+                <td>{{ usuario.telefono_celular }}</td>
+                <td>{{ nombreRol(usuario.role_acceso) }}</td>
+                <td>{{ nombreCarrera(usuario.carrera) }}</td>
+                <td><span class="active-chip" [class.inactive]="usuario.activo !== 1">{{ usuario.activo === 1 ? 'Activo' : 'Inactivo' }}</span></td>
+                <td><button class="secondary-button small-button" type="button" (click)="editar(usuario)">Editar</button></td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+  </section>
+</section>

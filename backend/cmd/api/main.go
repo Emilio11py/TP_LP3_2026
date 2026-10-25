@@ -16,19 +16,22 @@ import (
 )
 
 func main() {
-	databasePath := envOrDefault("DB_PATH", "data/sistema_cae.db")
-	db, err := services.OpenDB(context.Background(), databasePath)
+	databasePath := obtenerValorDeEntornoOPredeterminado("DB_PATH", "data/sistema_cae.db")
+	db, err := services.AbrirBaseDeDatos(context.Background(), databasePath)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer db.Close()
-	if err := services.ValidateSchema(context.Background(), db); err != nil {
+	if err := services.ValidarEsquema(context.Background(), db); err != nil {
+		log.Fatal(err)
+	}
+	if err := services.AsegurarEsquemaGestionUsuarios(context.Background(), db); err != nil {
 		log.Fatal(err)
 	}
 
 	server := &http.Server{
-		Addr:              ":" + strings.TrimPrefix(envOrDefault("PORT", "8080"), ":"),
-		Handler:           handlers.New(db, envOrDefault("FRONTEND_ORIGIN", "http://localhost:4200")),
+		Addr:              ":" + strings.TrimPrefix(obtenerValorDeEntornoOPredeterminado("PORT", "8080"), ":"),
+		Handler:           handlers.CrearEnrutador(db, obtenerValorDeEntornoOPredeterminado("FRONTEND_ORIGIN", "http://localhost:4200")),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -54,7 +57,7 @@ func main() {
 	}
 }
 
-func envOrDefault(name, fallback string) string {
+func obtenerValorDeEntornoOPredeterminado(name, fallback string) string {
 	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
 		return value
 	}

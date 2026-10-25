@@ -1,7 +1,7 @@
 import { HttpClient, HttpErrorResponse, HttpHeaders } from '@angular/common/http';
 import { Injectable, inject, signal } from '@angular/core';
 import { Observable, catchError, map, of, tap, throwError } from 'rxjs';
-import { Usuario } from './usuario';
+import { DatosRegistro, Usuario } from '../models/usuario';
 
 interface LoginResponse {
   token: string;
@@ -17,6 +17,15 @@ export class AuthService {
 
   readonly usuarioActual = signal<Usuario | null>(null);
 
+  get tokenActual(): string | null {
+    return localStorage.getItem(TOKEN_KEY);
+  }
+
+  encabezadosAutorizacion(): HttpHeaders {
+    const token = this.tokenActual;
+    return token ? this.crearEncabezados(token) : new HttpHeaders();
+  }
+
   restaurarSesion(): Observable<Usuario | null> {
     const token = localStorage.getItem(TOKEN_KEY);
     if (!token) {
@@ -24,7 +33,7 @@ export class AuthService {
     }
 
     return this.http
-      .get<Usuario>(`${API_URL}/auth/me`, { headers: this.headers(token) })
+      .get<Usuario>(`${API_URL}/auth/me`, { headers: this.crearEncabezados(token) })
       .pipe(
         tap((usuario) => this.usuarioActual.set(usuario)),
         catchError((error: HttpErrorResponse) => {
@@ -52,19 +61,23 @@ export class AuthService {
       );
   }
 
+  registrarse(datos: DatosRegistro): Observable<{ estado: string; mensaje: string }> {
+    return this.http.post<{ estado: string; mensaje: string }>(`${API_URL}/auth/register`, datos);
+  }
+
   cerrarSesion(): Observable<void> {
-    const token = localStorage.getItem(TOKEN_KEY);
+    const token = this.tokenActual;
     if (!token) {
       this.limpiarSesion();
       return of(void 0);
     }
 
     return this.http
-      .post<void>(`${API_URL}/auth/logout`, {}, { headers: this.headers(token) })
+      .post<void>(`${API_URL}/auth/logout`, {}, { headers: this.crearEncabezados(token) })
       .pipe(tap(() => this.limpiarSesion()));
   }
 
-  private headers(token: string): HttpHeaders {
+  private crearEncabezados(token: string): HttpHeaders {
     return new HttpHeaders({ Authorization: `Bearer ${token}` });
   }
 

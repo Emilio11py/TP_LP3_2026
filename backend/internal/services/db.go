@@ -9,7 +9,7 @@ import (
 	_ "github.com/glebarez/go-sqlite"
 )
 
-func OpenDB(ctx context.Context, path string) (*sql.DB, error) {
+func AbrirBaseDeDatos(ctx context.Context, path string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("abrir SQLite: %w", err)
@@ -31,7 +31,7 @@ func OpenDB(ctx context.Context, path string) (*sql.DB, error) {
 	return db, nil
 }
 
-func ValidateSchema(ctx context.Context, db *sql.DB) error {
+func ValidarEsquema(ctx context.Context, db *sql.DB) error {
 	queries := []struct {
 		table string
 		query string

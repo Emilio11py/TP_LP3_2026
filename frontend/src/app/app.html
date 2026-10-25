@@ -22,14 +22,24 @@
         >
           Panel del Estudiante
         </button>
-        <button
-          type="button"
-          [class.active]="seccion === 'administrativo'"
-          [attr.aria-current]="seccion === 'administrativo' ? 'page' : null"
-          (click)="seccion = 'administrativo'"
-        >
-          Panel Administrativo
-        </button>
+        @if (esAdministrativo) {
+          <button
+            type="button"
+            [class.active]="seccion === 'administrativo'"
+            [attr.aria-current]="seccion === 'administrativo' ? 'page' : null"
+            (click)="seccion = 'administrativo'"
+          >
+            Panel Administrativo
+          </button>
+          <button
+            type="button"
+            [class.active]="seccion === 'gestion-usuarios'"
+            [attr.aria-current]="seccion === 'gestion-usuarios' ? 'page' : null"
+            (click)="seccion = 'gestion-usuarios'"
+          >
+            Gestión de Usuarios
+          </button>
+        }
       </nav>
       <div class="account-actions">
         <span class="account-name">{{ nombreCompleto(usuario) }}</span>
@@ -59,8 +69,8 @@
             <div><dt>Matrícula</dt><dd>{{ usuario.codigo_matricula }}</dd></div>
             <div><dt>Nombre completo</dt><dd>{{ nombreCompleto(usuario) }}</dd></div>
             <div><dt>Correo electrónico</dt><dd>{{ usuario.email }}</dd></div>
-            <div><dt>Carrera</dt><dd>{{ usuario.carrera }}</dd></div>
-            <div><dt>Tipo de usuario</dt><dd>{{ usuario.role_acceso }}</dd></div>
+            <div><dt>Carrera</dt><dd>{{ nombreCarrera(usuario.carrera) }}</dd></div>
+            <div><dt>Tipo de usuario</dt><dd>{{ nombreRol(usuario.role_acceso) }}</dd></div>
           </dl>
         </section>
       } @else if (seccion === 'estudiante') {
@@ -70,13 +80,15 @@
           <p>Desde aquí podrás acceder a tus actividades y solicitudes CAE.</p>
           <p class="coming-soon">Las funciones de este panel se agregarán en la siguiente etapa.</p>
         </section>
-      } @else {
+      } @else if (seccion === 'administrativo' && esAdministrativo) {
         <section class="panel feature-panel">
           <p class="eyebrow">GESTIÓN DEL SISTEMA</p>
           <h1>Panel Administrativo</h1>
           <p>Este espacio estará destinado a la revisión y administración de solicitudes.</p>
           <p class="coming-soon">Las funciones administrativas se agregarán en la siguiente etapa.</p>
         </section>
+      } @else if (seccion === 'gestion-usuarios' && esAdministrativo) {
+        <app-gestion-usuarios />
       }
     </section>
   } @else {
@@ -179,7 +191,7 @@
               </button>
             </form>
           } @else {
-            <form class="auth-form" (ngSubmit)="$event.preventDefault()">
+            <form class="auth-form registration-form" (ngSubmit)="registrarse()">
               <label for="registro-documento">Nro. de documento</label>
               <input
                 id="registro-documento"
@@ -187,19 +199,72 @@
                 type="text"
                 inputmode="numeric"
                 placeholder="Ingresa tu número de documento"
+                [(ngModel)]="registro.nro_cedula"
                 required
               />
+              <label for="registro-nombres">Nombres</label>
+              <input id="registro-nombres" name="nombres" type="text" [(ngModel)]="registro.nombres" required />
+              <label for="registro-apellidos">Apellidos</label>
+              <input id="registro-apellidos" name="apellidos" type="text" [(ngModel)]="registro.apellidos" required />
               <label for="matricula">Matrícula</label>
               <input
                 id="matricula"
                 name="matricula"
                 type="text"
                 placeholder="Ingresa tu matrícula"
-                [(ngModel)]="matricula"
+                [(ngModel)]="registro.codigo_matricula"
                 required
               />
-              <p class="form-message">{{ mensajeRegistro }}</p>
-              <button class="primary-button" type="button" disabled>Registrarme</button>
+              <label for="registro-email">Correo electrónico</label>
+              <input id="registro-email" name="email" type="email" autocomplete="email" [(ngModel)]="registro.email" required />
+              <label for="registro-telefono">Teléfono celular</label>
+              <input id="registro-telefono" name="telefono" type="tel" [(ngModel)]="registro.telefono_celular" required />
+              <label for="registro-carrera">Carrera</label>
+              <select id="registro-carrera" name="carrera" [(ngModel)]="registro.carrera" required>
+                <option value="" disabled>Selecciona tu carrera</option>
+                <option value="Ing. Informática">Ing. Informática</option>
+                <option value="Ing. Química">Ing. Química</option>
+                <option value="Ing. Industrial">Ing. Industrial</option>
+              </select>
+              <label for="registro-contrasenha">Contraseña</label>
+              <div class="password-field">
+                <input
+                  id="registro-contrasenha"
+                  name="registroContrasenha"
+                  [type]="mostrarContrasenhaRegistro ? 'text' : 'password'"
+                  autocomplete="new-password"
+                  [(ngModel)]="registro.contrasenha"
+                  minlength="8"
+                  required
+                />
+                <button
+                  class="visibility-button"
+                  type="button"
+                  [attr.aria-label]="mostrarContrasenhaRegistro ? 'Ocultar contraseña' : 'Mostrar contraseña'"
+                  [attr.aria-pressed]="mostrarContrasenhaRegistro"
+                  (click)="mostrarContrasenhaRegistro = !mostrarContrasenhaRegistro"
+                >
+                  @if (mostrarContrasenhaRegistro) {
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M3 3l18 18M10.6 10.6a2 2 0 002.8 2.8M9.9 5.2A10.7 10.7 0 0112 5c5.5 0 9 7 9 7a15.8 15.8 0 01-3.2 3.9M6.2 6.2C3.9 7.7 3 12 3 12s3.5 7 9 7a10.4 10.4 0 004.2-.9" />
+                    </svg>
+                  } @else {
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M3 12s3.5-7 9-7 9 7 9 7-3.5 7-9 7-9-7-9-7z" />
+                      <circle cx="12" cy="12" r="2.5" />
+                    </svg>
+                  }
+                </button>
+              </div>
+              @if (mensajeError) {
+                <p class="form-message error-message" role="alert">{{ mensajeError }}</p>
+              }
+              @if (mensajeRegistro) {
+                <p class="form-message success-message" role="status">{{ mensajeRegistro }}</p>
+              }
+              <button class="primary-button" type="submit" [disabled]="cargando || registroEnviado">
+                {{ cargando ? 'Enviando...' : registroEnviado ? 'Solicitud enviada' : 'Registrarme' }}
+              </button>
             </form>
           }
 

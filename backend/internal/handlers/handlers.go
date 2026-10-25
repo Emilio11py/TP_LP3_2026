@@ -32,43 +32,50 @@ type session struct {
 	expires time.Time
 }
 
-func New(db *sql.DB, allowedOrigin string) http.Handler {
+func CrearEnrutador(db *sql.DB, allowedOrigin string) http.Handler {
 	app := &App{
 		DB:       db,
 		Origin:   allowedOrigin,
 		sessions: make(map[string]session),
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/health", app.health)
-	mux.HandleFunc("POST /api/auth/login", app.login)
-	mux.HandleFunc("GET /api/auth/me", app.me)
-	mux.HandleFunc("POST /api/auth/logout", app.logout)
-	mux.HandleFunc("GET /api/actividades", app.listActivities)
-	mux.HandleFunc("GET /api/solicitudes", app.listRequests)
-	mux.HandleFunc("POST /api/solicitudes", app.createRequest)
-	mux.HandleFunc("GET /api/solicitudes/{id}", app.getRequest)
-	mux.HandleFunc("PATCH /api/solicitudes/{id}/decision", app.decideRequest)
-	mux.HandleFunc("GET /api/solicitudes/{id}/documentos", app.listDocuments)
-	mux.HandleFunc("POST /api/solicitudes/{id}/documentos", app.uploadDocument)
-	mux.HandleFunc("GET /api/documentos/{id}", app.downloadDocument)
+	mux.HandleFunc("GET /api/health", app.verificarEstado)
+	mux.HandleFunc("POST /api/auth/login", app.iniciarSesion)
+	mux.HandleFunc("POST /api/auth/register", app.registrarUsuario)
+	mux.HandleFunc("GET /api/auth/me", app.obtenerUsuarioActual)
+	mux.HandleFunc("POST /api/auth/logout", app.cerrarSesion)
+	mux.HandleFunc("GET /api/usuarios", app.listarUsuarios)
+	mux.HandleFunc("POST /api/usuarios", app.crearUsuario)
+	mux.HandleFunc("PUT /api/usuarios/{id}", app.modificarUsuario)
+	mux.HandleFunc("DELETE /api/usuarios/{id}", app.eliminarUsuario)
+	mux.HandleFunc("GET /api/usuarios/pendientes", app.listarUsuariosPendientes)
+	mux.HandleFunc("PATCH /api/usuarios/pendientes/{id}/estado", app.cambiarEstadoSolicitudPendiente)
+	mux.HandleFunc("GET /api/actividades", app.listarActividades)
+	mux.HandleFunc("GET /api/solicitudes", app.listarSolicitudes)
+	mux.HandleFunc("POST /api/solicitudes", app.crearSolicitud)
+	mux.HandleFunc("GET /api/solicitudes/{id}", app.obtenerSolicitud)
+	mux.HandleFunc("PATCH /api/solicitudes/{id}/decision", app.resolverSolicitud)
+	mux.HandleFunc("GET /api/solicitudes/{id}/documentos", app.listarDocumentos)
+	mux.HandleFunc("POST /api/solicitudes/{id}/documentos", app.subirDocumento)
+	mux.HandleFunc("GET /api/documentos/{id}", app.descargarDocumento)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotFound, "Ruta no encontrada")
+		escribirError(w, http.StatusNotFound, "Ruta no encontrada")
 	})
-	return app.cors(mux)
+	return app.configurarCORS(mux)
 }
 
-func (a *App) cors(next http.Handler) http.Handler {
+func (a *App) configurarCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
 		if origin != "" {
 			if origin != a.Origin {
-				writeError(w, http.StatusForbidden, "Origen no permitido")
+				escribirError(w, http.StatusForbidden, "Origen no permitido")
 				return
 			}
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Add("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Expose-Headers", "Content-Disposition")
 		}
 		if r.Method == http.MethodOptions {
@@ -79,22 +86,22 @@ func (a *App) cors(next http.Handler) http.Handler {
 	})
 }
 
-func (a *App) health(w http.ResponseWriter, r *http.Request) {
+func (a *App) verificarEstado(w http.ResponseWriter, r *http.Request) {
 	if err := a.DB.PingContext(r.Context()); err != nil {
-		writeError(w, http.StatusServiceUnavailable, "Base de datos no disponible")
+		escribirError(w, http.StatusServiceUnavailable, "Base de datos no disponible")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"estado": "ok"})
+	escribirJSON(w, http.StatusOK, map[string]string{"estado": "ok"})
 }
 
-func (a *App) login(w http.ResponseWriter, r *http.Request) {
+func (a *App) iniciarSesion(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		NroCedula   string `json:"nro_cedula"`
 		Email       string `json:"email"`
 		Contrasenha string `json:"contrasenha"`
 	}
-	if err := decodeJSON(w, r, &input, 1<<20); err != nil {
-		writeError(w, http.StatusBadRequest, "Solicitud de inicio de sesión inválida")
+	if err := decodificarJSON(w, r, &input, 1<<20); err != nil {
+		escribirError(w, http.StatusBadRequest, "Solicitud de inicio de sesión inválida")
 		return
 	}
 	nroCedula := strings.TrimSpace(input.NroCedula)
@@ -102,7 +109,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	if (nroCedula == "") == (email == "") ||
 		len(nroCedula) > 120 || len(email) > 120 ||
 		input.Contrasenha == "" || len(input.Contrasenha) > 256 {
-		writeError(w, http.StatusBadRequest, "Ingrese un número de documento o email y una contraseña")
+		escribirError(w, http.StatusBadRequest, "Ingrese un número de documento o email y una contraseña")
 		return
 	}
 
@@ -130,37 +137,31 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		&storedPassword, &user.RoleAcceso, &user.Carrera, &user.Activo,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusUnauthorized, "Credenciales incorrectas")
+		escribirError(w, http.StatusUnauthorized, "Credenciales incorrectas")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "No se pudo validar el usuario")
+		escribirError(w, http.StatusInternalServerError, "No se pudo validar el usuario")
 		return
 	}
 
-	valid, needsUpgrade := services.VerifyPassword(input.Contrasenha, storedPassword)
-	if !valid {
-		writeError(w, http.StatusUnauthorized, "Credenciales incorrectas")
+	if !services.VerificarContrasena(input.Contrasenha, storedPassword) {
+		escribirError(w, http.StatusUnauthorized, "Credenciales incorrectas")
 		return
 	}
-	if needsUpgrade {
-		hashed, err := services.HashPassword(input.Contrasenha)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "No se pudo proteger la contraseña")
-			return
-		}
+	if services.EsHashAnterior(storedPassword) {
 		if _, err := a.DB.ExecContext(r.Context(),
 			"UPDATE USUARIOS SET CONTRASENHA = ? WHERE ID_USUARIO = ? AND CONTRASENHA = ?",
-			hashed, user.IDUsuario, storedPassword,
+			input.Contrasenha, user.IDUsuario, storedPassword,
 		); err != nil {
-			writeError(w, http.StatusInternalServerError, "No se pudo actualizar la contraseña")
+			escribirError(w, http.StatusInternalServerError, "No se pudo actualizar la contraseña")
 			return
 		}
 	}
 
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
-		writeError(w, http.StatusInternalServerError, "No se pudo iniciar la sesión")
+		escribirError(w, http.StatusInternalServerError, "No se pudo iniciar la sesión")
 		return
 	}
 	token := hex.EncodeToString(tokenBytes)
@@ -173,32 +174,32 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	a.sessions[token] = session{userID: user.IDUsuario, expires: time.Now().Add(12 * time.Hour)}
 	a.mu.Unlock()
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	escribirJSON(w, http.StatusOK, map[string]interface{}{
 		"token":   token,
 		"usuario": user,
 	})
 }
 
-func (a *App) me(w http.ResponseWriter, r *http.Request) {
-	user, ok := a.authenticatedUser(w, r)
+func (a *App) obtenerUsuarioActual(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.obtenerUsuarioAutenticado(w, r)
 	if ok {
-		writeJSON(w, http.StatusOK, user)
+		escribirJSON(w, http.StatusOK, user)
 	}
 }
 
-func (a *App) logout(w http.ResponseWriter, r *http.Request) {
-	if _, ok := a.authenticatedUser(w, r); !ok {
+func (a *App) cerrarSesion(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.obtenerUsuarioAutenticado(w, r); !ok {
 		return
 	}
-	token := bearerToken(r)
+	token := obtenerTokenAutorizacion(r)
 	a.mu.Lock()
 	delete(a.sessions, token)
 	a.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (a *App) listActivities(w http.ResponseWriter, r *http.Request) {
-	if _, ok := a.authenticatedUser(w, r); !ok {
+func (a *App) listarActividades(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.obtenerUsuarioAutenticado(w, r); !ok {
 		return
 	}
 	rows, err := a.DB.QueryContext(r.Context(), `
@@ -208,7 +209,7 @@ func (a *App) listActivities(w http.ResponseWriter, r *http.Request) {
 		ORDER BY NOMBRE_ACTIVIDAD
 	`)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "No se pudieron consultar las actividades")
+		escribirError(w, http.StatusInternalServerError, "No se pudieron consultar las actividades")
 		return
 	}
 	defer rows.Close()
@@ -217,72 +218,72 @@ func (a *App) listActivities(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var activity models.Actividad
 		if err := rows.Scan(&activity.IDActividad, &activity.NombreActividad, &activity.Activo); err != nil {
-			writeError(w, http.StatusInternalServerError, "No se pudieron leer las actividades")
+			escribirError(w, http.StatusInternalServerError, "No se pudieron leer las actividades")
 			return
 		}
 		activities = append(activities, activity)
 	}
 	if err := rows.Err(); err != nil {
-		writeError(w, http.StatusInternalServerError, "No se pudieron leer las actividades")
+		escribirError(w, http.StatusInternalServerError, "No se pudieron leer las actividades")
 		return
 	}
-	writeJSON(w, http.StatusOK, activities)
+	escribirJSON(w, http.StatusOK, activities)
 }
 
-func (a *App) listRequests(w http.ResponseWriter, r *http.Request) {
-	user, ok := a.authenticatedUser(w, r)
+func (a *App) listarSolicitudes(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.obtenerUsuarioAutenticado(w, r)
 	if !ok {
 		return
 	}
 	query := requestSelect + " ORDER BY s.ID_SOLICITUD_CAE DESC"
 	args := []interface{}{}
-	if !isReviewer(user.RoleAcceso) {
+	if !esRevisor(user.RoleAcceso) {
 		query = requestSelect + " WHERE s.ID_USUARIO_SOLICITA = ? ORDER BY s.ID_SOLICITUD_CAE DESC"
 		args = append(args, user.IDUsuario)
 	}
-	requests, err := a.queryRequests(r, query, args...)
+	requests, err := a.consultarSolicitudes(r, query, args...)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "No se pudieron consultar las solicitudes")
+		escribirError(w, http.StatusInternalServerError, "No se pudieron consultar las solicitudes")
 		return
 	}
-	writeJSON(w, http.StatusOK, requests)
+	escribirJSON(w, http.StatusOK, requests)
 }
 
-func (a *App) getRequest(w http.ResponseWriter, r *http.Request) {
-	user, ok := a.authenticatedUser(w, r)
+func (a *App) obtenerSolicitud(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.obtenerUsuarioAutenticado(w, r)
 	if !ok {
 		return
 	}
-	id, valid := pathID(r)
+	id, valid := obtenerIDDeRuta(r)
 	if !valid {
-		writeError(w, http.StatusBadRequest, "ID de solicitud inválido")
+		escribirError(w, http.StatusBadRequest, "ID de solicitud inválido")
 		return
 	}
 	query := requestSelect + " WHERE s.ID_SOLICITUD_CAE = ?"
 	args := []interface{}{id}
-	if !isReviewer(user.RoleAcceso) {
+	if !esRevisor(user.RoleAcceso) {
 		query += " AND s.ID_USUARIO_SOLICITA = ?"
 		args = append(args, user.IDUsuario)
 	}
-	requests, err := a.queryRequests(r, query, args...)
+	requests, err := a.consultarSolicitudes(r, query, args...)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "No se pudo consultar la solicitud")
+		escribirError(w, http.StatusInternalServerError, "No se pudo consultar la solicitud")
 		return
 	}
 	if len(requests) == 0 {
-		writeError(w, http.StatusNotFound, "Solicitud no encontrada")
+		escribirError(w, http.StatusNotFound, "Solicitud no encontrada")
 		return
 	}
-	writeJSON(w, http.StatusOK, requests[0])
+	escribirJSON(w, http.StatusOK, requests[0])
 }
 
-func (a *App) createRequest(w http.ResponseWriter, r *http.Request) {
-	user, ok := a.authenticatedUser(w, r)
+func (a *App) crearSolicitud(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.obtenerUsuarioAutenticado(w, r)
 	if !ok {
 		return
 	}
-	if strings.ToLower(strings.TrimSpace(user.RoleAcceso)) != "estudiante" {
-		writeError(w, http.StatusForbidden, "Solo los estudiantes pueden crear solicitudes")
+	if !esEstudiante(user.RoleAcceso) {
+		escribirError(w, http.StatusForbidden, "Solo los estudiantes pueden crear solicitudes")
 		return
 	}
 	var input struct {
@@ -291,20 +292,20 @@ func (a *App) createRequest(w http.ResponseWriter, r *http.Request) {
 		NombreActividad     string `json:"nombre_actividad"`
 		CargaHorariaMinutos int    `json:"carga_horaria_en_minutos"`
 	}
-	if err := decodeJSON(w, r, &input, 1<<20); err != nil {
-		writeError(w, http.StatusBadRequest, "JSON inválido")
+	if err := decodificarJSON(w, r, &input, 1<<20); err != nil {
+		escribirError(w, http.StatusBadRequest, "JSON inválido")
 		return
 	}
 	input.NombreActividad = strings.TrimSpace(input.NombreActividad)
 	if input.IDActividad <= 0 || input.NombreActividad == "" || len(input.NombreActividad) > 256 || input.CargaHorariaMinutos <= 0 {
-		writeError(w, http.StatusBadRequest, "Actividad, nombre y carga horaria válida son obligatorios")
+		escribirError(w, http.StatusBadRequest, "Actividad, nombre y carga horaria válida son obligatorios")
 		return
 	}
 	if input.FechaActividad == "" {
 		input.FechaActividad = time.Now().Format("2006-01-02")
 	}
 	if _, err := time.Parse("2006-01-02", input.FechaActividad); err != nil {
-		writeError(w, http.StatusBadRequest, "La fecha de actividad debe tener formato AAAA-MM-DD")
+		escribirError(w, http.StatusBadRequest, "La fecha de actividad debe tener formato AAAA-MM-DD")
 		return
 	}
 
@@ -313,18 +314,18 @@ func (a *App) createRequest(w http.ResponseWriter, r *http.Request) {
 		"SELECT ACTIVO FROM ACTIVIDADES WHERE ID_ACTIVIDAD = ?", input.IDActividad,
 	).Scan(&active)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && active != 1) {
-		writeError(w, http.StatusBadRequest, "La actividad seleccionada no existe o está inactiva")
+		escribirError(w, http.StatusBadRequest, "La actividad seleccionada no existe o está inactiva")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "No se pudo validar la actividad")
+		escribirError(w, http.StatusInternalServerError, "No se pudo validar la actividad")
 		return
 	}
 
 	now := time.Now()
 	tx, err := a.DB.BeginTx(r.Context(), nil)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "No se pudo iniciar la transacción")
+		escribirError(w, http.StatusInternalServerError, "No se pudo iniciar la transacción")
 		return
 	}
 	result, err := tx.ExecContext(r.Context(), `
@@ -334,13 +335,13 @@ func (a *App) createRequest(w http.ResponseWriter, r *http.Request) {
 	`, now.Format("2006-01-02"), now.Format("15:04:05"), input.IDActividad, user.IDUsuario)
 	if err != nil {
 		_ = tx.Rollback()
-		writeError(w, http.StatusInternalServerError, "No se pudo crear la solicitud")
+		escribirError(w, http.StatusInternalServerError, "No se pudo crear la solicitud")
 		return
 	}
 	requestID, err := result.LastInsertId()
 	if err != nil {
 		_ = tx.Rollback()
-		writeError(w, http.StatusInternalServerError, "No se pudo obtener el ID de la solicitud")
+		escribirError(w, http.StatusInternalServerError, "No se pudo obtener el ID de la solicitud")
 		return
 	}
 	_, err = tx.ExecContext(r.Context(), `
@@ -350,46 +351,46 @@ func (a *App) createRequest(w http.ResponseWriter, r *http.Request) {
 	`, requestID, input.FechaActividad, input.NombreActividad, input.CargaHorariaMinutos)
 	if err != nil {
 		_ = tx.Rollback()
-		writeError(w, http.StatusInternalServerError, "No se pudo guardar el detalle de la solicitud")
+		escribirError(w, http.StatusInternalServerError, "No se pudo guardar el detalle de la solicitud")
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		writeError(w, http.StatusInternalServerError, "No se pudo confirmar la solicitud")
+		escribirError(w, http.StatusInternalServerError, "No se pudo confirmar la solicitud")
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]int64{"id_solicitud_cae": requestID})
+	escribirJSON(w, http.StatusCreated, map[string]int64{"id_solicitud_cae": requestID})
 }
 
-func (a *App) decideRequest(w http.ResponseWriter, r *http.Request) {
-	user, ok := a.authenticatedUser(w, r)
+func (a *App) resolverSolicitud(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.obtenerUsuarioAutenticado(w, r)
 	if !ok {
 		return
 	}
-	if !isReviewer(user.RoleAcceso) {
-		writeError(w, http.StatusForbidden, "No tenés permisos para resolver solicitudes")
+	if !esRevisor(user.RoleAcceso) {
+		escribirError(w, http.StatusForbidden, "No tenés permisos para resolver solicitudes")
 		return
 	}
-	id, valid := pathID(r)
+	id, valid := obtenerIDDeRuta(r)
 	if !valid {
-		writeError(w, http.StatusBadRequest, "ID de solicitud inválido")
+		escribirError(w, http.StatusBadRequest, "ID de solicitud inválido")
 		return
 	}
 	var input struct {
 		Estado        string `json:"estado_solicitud"`
 		Observaciones string `json:"observaciones"`
 	}
-	if err := decodeJSON(w, r, &input, 1<<20); err != nil {
-		writeError(w, http.StatusBadRequest, "JSON inválido")
+	if err := decodificarJSON(w, r, &input, 1<<20); err != nil {
+		escribirError(w, http.StatusBadRequest, "JSON inválido")
 		return
 	}
 	input.Estado = strings.ToUpper(strings.TrimSpace(input.Estado))
 	input.Observaciones = strings.TrimSpace(input.Observaciones)
 	if input.Estado != "APROBADO" && input.Estado != "RECHAZADO" {
-		writeError(w, http.StatusBadRequest, "El estado debe ser APROBADO o RECHAZADO")
+		escribirError(w, http.StatusBadRequest, "El estado debe ser APROBADO o RECHAZADO")
 		return
 	}
 	if len(input.Observaciones) > 256 || (input.Estado == "RECHAZADO" && input.Observaciones == "") {
-		writeError(w, http.StatusBadRequest, "La observación es obligatoria al rechazar y no puede superar 256 caracteres")
+		escribirError(w, http.StatusBadRequest, "La observación es obligatoria al rechazar y no puede superar 256 caracteres")
 		return
 	}
 	result, err := a.DB.ExecContext(r.Context(), `
@@ -399,38 +400,38 @@ func (a *App) decideRequest(w http.ResponseWriter, r *http.Request) {
 		WHERE ID_SOLICITUD_CAE = ? AND ESTADO_SOLICITUD = 'PENDIENTE'
 	`, input.Estado, input.Observaciones, time.Now().Format("2006-01-02"), user.IDUsuario, id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "No se pudo resolver la solicitud")
+		escribirError(w, http.StatusInternalServerError, "No se pudo resolver la solicitud")
 		return
 	}
 	changed, err := result.RowsAffected()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "No se pudo confirmar el resultado")
+		escribirError(w, http.StatusInternalServerError, "No se pudo confirmar el resultado")
 		return
 	}
 	if changed == 0 {
-		writeError(w, http.StatusConflict, "La solicitud no existe o ya fue resuelta")
+		escribirError(w, http.StatusConflict, "La solicitud no existe o ya fue resuelta")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (a *App) listDocuments(w http.ResponseWriter, r *http.Request) {
-	user, ok := a.authenticatedUser(w, r)
+func (a *App) listarDocumentos(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.obtenerUsuarioAutenticado(w, r)
 	if !ok {
 		return
 	}
-	requestID, valid := pathID(r)
+	requestID, valid := obtenerIDDeRuta(r)
 	if !valid {
-		writeError(w, http.StatusBadRequest, "ID de solicitud inválido")
+		escribirError(w, http.StatusBadRequest, "ID de solicitud inválido")
 		return
 	}
-	allowed, err := a.canAccessRequest(r, user, requestID)
+	allowed, err := a.puedeAccederSolicitud(r, user, requestID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "No se pudo validar el acceso a la solicitud")
+		escribirError(w, http.StatusInternalServerError, "No se pudo validar el acceso a la solicitud")
 		return
 	}
 	if !allowed {
-		writeError(w, http.StatusNotFound, "Solicitud no encontrada")
+		escribirError(w, http.StatusNotFound, "Solicitud no encontrada")
 		return
 	}
 	rows, err := a.DB.QueryContext(r.Context(), `
@@ -440,7 +441,7 @@ func (a *App) listDocuments(w http.ResponseWriter, r *http.Request) {
 		ORDER BY ID_DETALLE_DOC_SOLICITUD_CAE
 	`, requestID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "No se pudieron consultar los documentos")
+		escribirError(w, http.StatusInternalServerError, "No se pudieron consultar los documentos")
 		return
 	}
 	defer rows.Close()
@@ -453,71 +454,71 @@ func (a *App) listDocuments(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var item document
 		if err := rows.Scan(&item.ID, &item.Tipo, &item.Observaciones); err != nil {
-			writeError(w, http.StatusInternalServerError, "No se pudieron leer los documentos")
+			escribirError(w, http.StatusInternalServerError, "No se pudieron leer los documentos")
 			return
 		}
 		documents = append(documents, item)
 	}
 	if err := rows.Err(); err != nil {
-		writeError(w, http.StatusInternalServerError, "No se pudieron leer los documentos")
+		escribirError(w, http.StatusInternalServerError, "No se pudieron leer los documentos")
 		return
 	}
-	writeJSON(w, http.StatusOK, documents)
+	escribirJSON(w, http.StatusOK, documents)
 }
 
-func (a *App) uploadDocument(w http.ResponseWriter, r *http.Request) {
-	user, ok := a.authenticatedUser(w, r)
+func (a *App) subirDocumento(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.obtenerUsuarioAutenticado(w, r)
 	if !ok {
 		return
 	}
-	requestID, valid := pathID(r)
+	requestID, valid := obtenerIDDeRuta(r)
 	if !valid {
-		writeError(w, http.StatusBadRequest, "ID de solicitud inválido")
+		escribirError(w, http.StatusBadRequest, "ID de solicitud inválido")
 		return
 	}
-	allowed, err := a.canAccessRequest(r, user, requestID)
+	allowed, err := a.puedeAccederSolicitud(r, user, requestID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "No se pudo validar el acceso a la solicitud")
+		escribirError(w, http.StatusInternalServerError, "No se pudo validar el acceso a la solicitud")
 		return
 	}
 	if !allowed {
-		writeError(w, http.StatusNotFound, "Solicitud no encontrada")
+		escribirError(w, http.StatusNotFound, "Solicitud no encontrada")
 		return
 	}
 	if r.ContentLength > maxDocumentSize+(1<<20) {
-		writeError(w, http.StatusRequestEntityTooLarge, "El documento supera el límite de 5 MB")
+		escribirError(w, http.StatusRequestEntityTooLarge, "El documento supera el límite de 5 MB")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxDocumentSize+(1<<20))
 	if err := r.ParseMultipartForm(maxDocumentSize); err != nil {
 		var maxBytesError *http.MaxBytesError
 		if errors.As(err, &maxBytesError) {
-			writeError(w, http.StatusRequestEntityTooLarge, "El documento supera el límite de 5 MB")
+			escribirError(w, http.StatusRequestEntityTooLarge, "El documento supera el límite de 5 MB")
 			return
 		}
-		writeError(w, http.StatusBadRequest, "Formulario de documento inválido o demasiado grande")
+		escribirError(w, http.StatusBadRequest, "Formulario de documento inválido o demasiado grande")
 		return
 	}
 	defer r.MultipartForm.RemoveAll()
 	file, _, err := r.FormFile("documento")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "Falta el archivo en el campo documento")
+		escribirError(w, http.StatusBadRequest, "Falta el archivo en el campo documento")
 		return
 	}
 	defer file.Close()
 	data, err := io.ReadAll(io.LimitReader(file, maxDocumentSize+1))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "No se pudo leer el documento")
+		escribirError(w, http.StatusBadRequest, "No se pudo leer el documento")
 		return
 	}
 	if len(data) == 0 || len(data) > maxDocumentSize {
-		writeError(w, http.StatusRequestEntityTooLarge, "El documento debe pesar entre 1 byte y 5 MB")
+		escribirError(w, http.StatusRequestEntityTooLarge, "El documento debe pesar entre 1 byte y 5 MB")
 		return
 	}
 	documentType := strings.TrimSpace(r.FormValue("tipo_documento"))
 	observations := strings.TrimSpace(r.FormValue("observaciones"))
 	if documentType == "" || len(documentType) > 32 || len(observations) > 180 {
-		writeError(w, http.StatusBadRequest, "Tipo de documento obligatorio (máximo 32 caracteres) y observaciones de hasta 180 caracteres")
+		escribirError(w, http.StatusBadRequest, "Tipo de documento obligatorio (máximo 32 caracteres) y observaciones de hasta 180 caracteres")
 		return
 	}
 	result, err := a.DB.ExecContext(r.Context(), `
@@ -526,25 +527,25 @@ func (a *App) uploadDocument(w http.ResponseWriter, r *http.Request) {
 		VALUES (?, ?, ?, ?)
 	`, requestID, data, documentType, observations)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "No se pudo guardar el documento")
+		escribirError(w, http.StatusInternalServerError, "No se pudo guardar el documento")
 		return
 	}
 	id, err := result.LastInsertId()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "No se pudo obtener el ID del documento")
+		escribirError(w, http.StatusInternalServerError, "No se pudo obtener el ID del documento")
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]int64{"id_documento": id})
+	escribirJSON(w, http.StatusCreated, map[string]int64{"id_documento": id})
 }
 
-func (a *App) downloadDocument(w http.ResponseWriter, r *http.Request) {
-	user, ok := a.authenticatedUser(w, r)
+func (a *App) descargarDocumento(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.obtenerUsuarioAutenticado(w, r)
 	if !ok {
 		return
 	}
-	id, valid := pathID(r)
+	id, valid := obtenerIDDeRuta(r)
 	if !valid {
-		writeError(w, http.StatusBadRequest, "ID de documento inválido")
+		escribirError(w, http.StatusBadRequest, "ID de documento inválido")
 		return
 	}
 	var requestID int
@@ -555,20 +556,20 @@ func (a *App) downloadDocument(w http.ResponseWriter, r *http.Request) {
 		WHERE d.ID_DETALLE_DOC_SOLICITUD_CAE = ?
 	`, id).Scan(&requestID, &data)
 	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "Documento no encontrado")
+		escribirError(w, http.StatusNotFound, "Documento no encontrado")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "No se pudo consultar el documento")
+		escribirError(w, http.StatusInternalServerError, "No se pudo consultar el documento")
 		return
 	}
-	allowed, err := a.canAccessRequest(r, user, requestID)
+	allowed, err := a.puedeAccederSolicitud(r, user, requestID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "No se pudo validar el acceso al documento")
+		escribirError(w, http.StatusInternalServerError, "No se pudo validar el acceso al documento")
 		return
 	}
 	if !allowed {
-		writeError(w, http.StatusNotFound, "Documento no encontrado")
+		escribirError(w, http.StatusNotFound, "Documento no encontrado")
 		return
 	}
 	w.Header().Set("Content-Type", http.DetectContentType(data))
@@ -577,10 +578,10 @@ func (a *App) downloadDocument(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
-func (a *App) authenticatedUser(w http.ResponseWriter, r *http.Request) (models.Usuario, bool) {
-	token := bearerToken(r)
+func (a *App) obtenerUsuarioAutenticado(w http.ResponseWriter, r *http.Request) (models.Usuario, bool) {
+	token := obtenerTokenAutorizacion(r)
 	if token == "" {
-		writeError(w, http.StatusUnauthorized, "Se requiere autenticación")
+		escribirError(w, http.StatusUnauthorized, "Se requiere autenticación")
 		return models.Usuario{}, false
 	}
 	a.mu.Lock()
@@ -591,7 +592,7 @@ func (a *App) authenticatedUser(w http.ResponseWriter, r *http.Request) (models.
 	}
 	a.mu.Unlock()
 	if !exists {
-		writeError(w, http.StatusUnauthorized, "La sesión expiró o no es válida")
+		escribirError(w, http.StatusUnauthorized, "La sesión expiró o no es válida")
 		return models.Usuario{}, false
 	}
 	var user models.Usuario
@@ -608,20 +609,20 @@ func (a *App) authenticatedUser(w http.ResponseWriter, r *http.Request) (models.
 		a.mu.Lock()
 		delete(a.sessions, token)
 		a.mu.Unlock()
-		writeError(w, http.StatusUnauthorized, "El usuario ya no está activo")
+		escribirError(w, http.StatusUnauthorized, "El usuario ya no está activo")
 		return models.Usuario{}, false
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "No se pudo validar la sesión")
+		escribirError(w, http.StatusInternalServerError, "No se pudo validar la sesión")
 		return models.Usuario{}, false
 	}
 	return user, true
 }
 
-func (a *App) canAccessRequest(r *http.Request, user models.Usuario, requestID int) (bool, error) {
+func (a *App) puedeAccederSolicitud(r *http.Request, user models.Usuario, requestID int) (bool, error) {
 	query := "SELECT 1 FROM SOLICITUDES_CAES WHERE ID_SOLICITUD_CAE = ?"
 	args := []interface{}{requestID}
-	if !isReviewer(user.RoleAcceso) {
+	if !esRevisor(user.RoleAcceso) {
 		query += " AND ID_USUARIO_SOLICITA = ?"
 		args = append(args, user.IDUsuario)
 	}
@@ -644,7 +645,7 @@ const requestSelect = `
 	JOIN USUARIOS u ON u.ID_USUARIO = s.ID_USUARIO_SOLICITA
 `
 
-func (a *App) queryRequests(r *http.Request, query string, args ...interface{}) ([]models.SolicitudCAE, error) {
+func (a *App) consultarSolicitudes(r *http.Request, query string, args ...interface{}) ([]models.SolicitudCAE, error) {
 	rows, err := a.DB.QueryContext(r.Context(), query, args...)
 	if err != nil {
 		return nil, err
@@ -666,7 +667,7 @@ func (a *App) queryRequests(r *http.Request, query string, args ...interface{}) 
 	return requests, rows.Err()
 }
 
-func bearerToken(r *http.Request) string {
+func obtenerTokenAutorizacion(r *http.Request) string {
 	header := strings.Fields(r.Header.Get("Authorization"))
 	if len(header) != 2 || !strings.EqualFold(header[0], "Bearer") {
 		return ""
@@ -674,7 +675,7 @@ func bearerToken(r *http.Request) string {
 	return header[1]
 }
 
-func isReviewer(role string) bool {
+func esRevisor(role string) bool {
 	switch strings.ToLower(strings.TrimSpace(role)) {
 	case "dir_academica", "dir_carrera":
 		return true
@@ -683,12 +684,16 @@ func isReviewer(role string) bool {
 	}
 }
 
-func pathID(r *http.Request) (int, bool) {
+func esEstudiante(role string) bool {
+	return strings.EqualFold(strings.TrimSpace(role), "estudiante")
+}
+
+func obtenerIDDeRuta(r *http.Request) (int, bool) {
 	id, err := strconv.Atoi(r.PathValue("id"))
 	return id, err == nil && id > 0
 }
 
-func decodeJSON(w http.ResponseWriter, r *http.Request, destination interface{}, maxBytes int64) error {
+func decodificarJSON(w http.ResponseWriter, r *http.Request, destination interface{}, maxBytes int64) error {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
@@ -702,12 +707,12 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, destination interface{},
 	return nil
 }
 
-func writeJSON(w http.ResponseWriter, status int, value interface{}) {
+func escribirJSON(w http.ResponseWriter, status int, value interface{}) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
 }
 
-func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]string{"error": message})
+func escribirError(w http.ResponseWriter, status int, message string) {
+	escribirJSON(w, status, map[string]string{"error": message})
 }

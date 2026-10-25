@@ -15,6 +15,23 @@ type Usuario struct {
 	Activo          int    `json:"activo"`
 }
 
+type UsuarioPendiente struct {
+	ID              int    `json:"id"`
+	NroCedula       int    `json:"nro_cedula"`
+	Nombres         string `json:"nombres"`
+	Apellidos       string `json:"apellidos"`
+	CodigoMatricula string `json:"codigo_matricula"`
+	Email           string `json:"email"`
+	TelefonoCelular string `json:"telefono_celular"`
+	RoleAcceso      string `json:"role_acceso"`
+	Carrera         string `json:"carrera"`
+	Estado          string `json:"estado"`
+	FechaSolicitud  string `json:"fecha_solicitud"`
+	FechaRevision   string `json:"fecha_revision,omitempty"`
+	RevisadoPor     int    `json:"revisado_por,omitempty"`
+	RevisorNombre   string `json:"revisor_nombre,omitempty"`
+}
+
 // Actividad representa un tipo de actividad en la tabla ACTIVIDADES
 type Actividad struct {
 	IDActividad     int    `json:"id_actividad"`

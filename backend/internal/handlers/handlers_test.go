@@ -2,7 +2,10 @@ package handlers
 
 import (
 	"bytes"
+	"crypto/pbkdf2"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"mime/multipart"
 	"net/http"
@@ -15,21 +18,21 @@ import (
 	"tp-backend/internal/services"
 )
 
-func TestRequestLifecycle(t *testing.T) {
-	db := testDB(t)
-	handler := New(db, "http://localhost:4200")
+func TestCicloDeVidaSolicitud(t *testing.T) {
+	db := crearBaseDeDatosDePrueba(t)
+	handler := CrearEnrutador(db, "http://localhost:4200")
 
-	loginResponse := call(handler, http.MethodPost, "/api/auth/login", "", `{"email":"student@example.test","contrasenha":"student-password"}`, "")
+	loginResponse := realizarPeticionDePrueba(handler, http.MethodPost, "/api/auth/login", "", `{"email":"student@example.test","contrasenha":"student-password"}`, "")
 	if loginResponse.Code != http.StatusOK {
 		t.Fatalf("login status = %d, body = %s", loginResponse.Code, loginResponse.Body.String())
 	}
 	if strings.Contains(loginResponse.Body.String(), "contrasenha") {
 		t.Fatal("login response exposed a password field")
 	}
-	var login struct {
+	var iniciarSesion struct {
 		Token string `json:"token"`
 	}
-	if err := json.Unmarshal(loginResponse.Body.Bytes(), &login); err != nil || login.Token == "" {
+	if err := json.Unmarshal(loginResponse.Body.Bytes(), &iniciarSesion); err != nil || iniciarSesion.Token == "" {
 		t.Fatalf("invalid login response: %v", err)
 	}
 
@@ -37,11 +40,11 @@ func TestRequestLifecycle(t *testing.T) {
 	if err := db.QueryRow("SELECT CONTRASENHA FROM USUARIOS WHERE ID_USUARIO = 1").Scan(&storedPassword); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(storedPassword, "pbkdf2-sha256$") {
-		t.Fatal("legacy password was not upgraded after login")
+	if storedPassword != "student-password" {
+		t.Fatalf("existing password changed after login: %q", storedPassword)
 	}
 
-	activities := call(handler, http.MethodGet, "/api/actividades", login.Token, "", "http://localhost:4200")
+	activities := realizarPeticionDePrueba(handler, http.MethodGet, "/api/actividades", iniciarSesion.Token, "", "http://localhost:4200")
 	if activities.Code != http.StatusOK || !strings.Contains(activities.Body.String(), "Cursos o Talleres") {
 		t.Fatalf("activity response = %d, %s", activities.Code, activities.Body.String())
 	}
@@ -49,7 +52,7 @@ func TestRequestLifecycle(t *testing.T) {
 		t.Fatal("expected frontend CORS origin to be allowed")
 	}
 
-	created := call(handler, http.MethodPost, "/api/solicitudes", login.Token,
+	created := realizarPeticionDePrueba(handler, http.MethodPost, "/api/solicitudes", iniciarSesion.Token,
 		`{"id_actividad":2,"fecha_actividad":"2026-10-20","nombre_actividad":"Taller de prueba","carga_horaria_en_minutos":120}`, "")
 	if created.Code != http.StatusCreated {
 		t.Fatalf("create request status = %d, body = %s", created.Code, created.Body.String())
@@ -69,18 +72,18 @@ func TestRequestLifecycle(t *testing.T) {
 		t.Fatalf("request owner = %d, want authenticated user 1", ownerID)
 	}
 
-	otherLogin := call(handler, http.MethodPost, "/api/auth/login", "", `{"email":"other@example.test","contrasenha":"other-password"}`, "")
+	otherLogin := realizarPeticionDePrueba(handler, http.MethodPost, "/api/auth/login", "", `{"email":"other@example.test","contrasenha":"other-password"}`, "")
 	var other struct {
 		Token string `json:"token"`
 	}
 	if err := json.Unmarshal(otherLogin.Body.Bytes(), &other); err != nil || other.Token == "" {
 		t.Fatalf("could not log in second student: %v", err)
 	}
-	otherRequests := call(handler, http.MethodGet, "/api/solicitudes", other.Token, "", "")
+	otherRequests := realizarPeticionDePrueba(handler, http.MethodGet, "/api/solicitudes", other.Token, "", "")
 	if otherRequests.Code != http.StatusOK || strings.TrimSpace(otherRequests.Body.String()) != "[]" {
 		t.Fatalf("student saw another user's requests: %d, %s", otherRequests.Code, otherRequests.Body.String())
 	}
-	hiddenRequest := call(handler, http.MethodGet, "/api/solicitudes/"+jsonNumber(result.ID), other.Token, "", "")
+	hiddenRequest := realizarPeticionDePrueba(handler, http.MethodGet, "/api/solicitudes/"+numeroComoTextoJSON(result.ID), other.Token, "", "")
 	if hiddenRequest.Code != http.StatusNotFound {
 		t.Fatalf("other student's request detail status = %d, want 404", hiddenRequest.Code)
 	}
@@ -100,8 +103,8 @@ func TestRequestLifecycle(t *testing.T) {
 	if err := form.Close(); err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/api/solicitudes/"+jsonNumber(result.ID)+"/documentos", &upload)
-	request.Header.Set("Authorization", "Bearer "+login.Token)
+	request := httptest.NewRequest(http.MethodPost, "/api/solicitudes/"+numeroComoTextoJSON(result.ID)+"/documentos", &upload)
+	request.Header.Set("Authorization", "Bearer "+iniciarSesion.Token)
 	request.Header.Set("Content-Type", form.FormDataContentType())
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -114,63 +117,259 @@ func TestRequestLifecycle(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &uploaded); err != nil || uploaded.ID <= 0 {
 		t.Fatalf("invalid upload response: %v", err)
 	}
-	download := call(handler, http.MethodGet, "/api/documentos/"+jsonNumber(uploaded.ID), login.Token, "", "")
+	download := realizarPeticionDePrueba(handler, http.MethodGet, "/api/documentos/"+numeroComoTextoJSON(uploaded.ID), iniciarSesion.Token, "", "")
 	if download.Code != http.StatusOK || download.Body.String() != "documento de prueba" {
 		t.Fatalf("download response = %d, %q", download.Code, download.Body.String())
 	}
 
-	reviewerLogin := call(handler, http.MethodPost, "/api/auth/login", "", `{"email":"reviewer@example.test","contrasenha":"reviewer-password"}`, "")
+	reviewerLogin := realizarPeticionDePrueba(handler, http.MethodPost, "/api/auth/login", "", `{"email":"reviewer@example.test","contrasenha":"reviewer-password"}`, "")
 	var reviewer struct {
 		Token string `json:"token"`
 	}
 	if err := json.Unmarshal(reviewerLogin.Body.Bytes(), &reviewer); err != nil || reviewer.Token == "" {
 		t.Fatalf("could not log in reviewer: %v", err)
 	}
-	decision := call(handler, http.MethodPatch, "/api/solicitudes/"+jsonNumber(result.ID)+"/decision",
+	decision := realizarPeticionDePrueba(handler, http.MethodPatch, "/api/solicitudes/"+numeroComoTextoJSON(result.ID)+"/decision",
 		reviewer.Token, `{"estado_solicitud":"APROBADO","observaciones":"Documentación revisada"}`, "")
 	if decision.Code != http.StatusNoContent {
 		t.Fatalf("decision status = %d, body = %s", decision.Code, decision.Body.String())
 	}
-	repeatedDecision := call(handler, http.MethodPatch, "/api/solicitudes/"+jsonNumber(result.ID)+"/decision",
+	repeatedDecision := realizarPeticionDePrueba(handler, http.MethodPatch, "/api/solicitudes/"+numeroComoTextoJSON(result.ID)+"/decision",
 		reviewer.Token, `{"estado_solicitud":"RECHAZADO","observaciones":"Ya resuelta"}`, "")
 	if repeatedDecision.Code != http.StatusConflict {
 		t.Fatalf("second decision status = %d, want 409", repeatedDecision.Code)
 	}
-	detail := call(handler, http.MethodGet, "/api/solicitudes/"+jsonNumber(result.ID), login.Token, "", "")
+	detail := realizarPeticionDePrueba(handler, http.MethodGet, "/api/solicitudes/"+numeroComoTextoJSON(result.ID), iniciarSesion.Token, "", "")
 	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), `"estado_solicitud":"APROBADO"`) {
 		t.Fatalf("student cannot see request decision: %d, %s", detail.Code, detail.Body.String())
 	}
 }
 
-func TestAuthenticationAndCORS(t *testing.T) {
-	handler := New(testDB(t), "http://localhost:4200")
+func TestAutenticacionYCORS(t *testing.T) {
+	handler := CrearEnrutador(crearBaseDeDatosDePrueba(t), "http://localhost:4200")
 
-	documentLogin := call(handler, http.MethodPost, "/api/auth/login", "",
+	documentLogin := realizarPeticionDePrueba(handler, http.MethodPost, "/api/auth/login", "",
 		`{"nro_cedula":"1001","contrasenha":"student-password"}`, "")
 	if documentLogin.Code != http.StatusOK || !strings.Contains(documentLogin.Body.String(), `"nro_cedula":1001`) {
 		t.Fatalf("document login response = %d, %s", documentLogin.Code, documentLogin.Body.String())
 	}
-	unauthorized := call(handler, http.MethodGet, "/api/solicitudes", "", "", "")
+	unauthorized := realizarPeticionDePrueba(handler, http.MethodGet, "/api/solicitudes", "", "", "")
 	if unauthorized.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated request status = %d, want 401", unauthorized.Code)
 	}
-	wrongPassword := call(handler, http.MethodPost, "/api/auth/login", "", `{"email":"student@example.test","contrasenha":"wrong"}`, "")
+	wrongPassword := realizarPeticionDePrueba(handler, http.MethodPost, "/api/auth/login", "", `{"email":"student@example.test","contrasenha":"wrong"}`, "")
 	if wrongPassword.Code != http.StatusUnauthorized {
 		t.Fatalf("wrong password status = %d, want 401", wrongPassword.Code)
 	}
-	forbiddenOrigin := call(handler, http.MethodGet, "/api/health", "", "", "https://not-allowed.example")
+	forbiddenOrigin := realizarPeticionDePrueba(handler, http.MethodGet, "/api/health", "", "", "https://not-allowed.example")
 	if forbiddenOrigin.Code != http.StatusForbidden {
 		t.Fatalf("unapproved CORS origin status = %d, want 403", forbiddenOrigin.Code)
 	}
-	preflight := call(handler, http.MethodOptions, "/api/solicitudes", "", "", "http://localhost:4200")
+	preflight := realizarPeticionDePrueba(handler, http.MethodOptions, "/api/solicitudes", "", "", "http://localhost:4200")
 	if preflight.Code != http.StatusNoContent {
 		t.Fatalf("preflight status = %d, want 204", preflight.Code)
 	}
 }
 
-func testDB(t *testing.T) *sql.DB {
+func TestRegistroYAdministracionUsuarios(t *testing.T) {
+	db := crearBaseDeDatosDePrueba(t)
+	handler := CrearEnrutador(db, "http://localhost:4200")
+
+	unauthenticated := realizarPeticionDePrueba(handler, http.MethodGet, "/api/usuarios", "", "", "")
+	if unauthenticated.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated user list status = %d, want 401", unauthenticated.Code)
+	}
+	studentLogin := realizarPeticionDePrueba(handler, http.MethodPost, "/api/auth/login", "",
+		`{"nro_cedula":"1001","contrasenha":"student-password"}`, "")
+	var student struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(studentLogin.Body.Bytes(), &student); err != nil || student.Token == "" {
+		t.Fatalf("could not log in student: %v", err)
+	}
+	studentAccess := realizarPeticionDePrueba(handler, http.MethodGet, "/api/usuarios", student.Token, "", "")
+	if studentAccess.Code != http.StatusForbidden {
+		t.Fatalf("student user management status = %d, want 403", studentAccess.Code)
+	}
+	pendingAccess := realizarPeticionDePrueba(handler, http.MethodGet, "/api/usuarios/pendientes", student.Token, "", "")
+	if pendingAccess.Code != http.StatusForbidden {
+		t.Fatalf("student pending user list status = %d, want 403", pendingAccess.Code)
+	}
+	createDenied := realizarPeticionDePrueba(handler, http.MethodPost, "/api/usuarios", student.Token, `{}`, "")
+	if createDenied.Code != http.StatusForbidden {
+		t.Fatalf("student create user status = %d, want 403", createDenied.Code)
+	}
+	adminLogin := realizarPeticionDePrueba(handler, http.MethodPost, "/api/auth/login", "",
+		`{"nro_cedula":"1003","contrasenha":"reviewer-password"}`, "")
+	var admin struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(adminLogin.Body.Bytes(), &admin); err != nil || admin.Token == "" {
+		t.Fatalf("could not log in reviewer: %v", err)
+	}
+
+	invalidCareer := realizarPeticionDePrueba(handler, http.MethodPost, "/api/auth/register", "", `{
+		"nro_cedula":"1006","nombres":"Persona","apellidos":"Fuera",
+		"codigo_matricula":"P006","email":"career@example.test",
+		"telefono_celular":"099000006","contrasenha":"pending-password",
+		"role_acceso":"estudiante","carrera":"Otra carrera"
+	}`, "")
+	if invalidCareer.Code != http.StatusBadRequest {
+		t.Fatalf("invalid registration career status = %d, want 400", invalidCareer.Code)
+	}
+	registration := realizarPeticionDePrueba(handler, http.MethodPost, "/api/auth/register", "", `{
+		"nro_cedula":"1004","nombres":"Persona","apellidos":"Pendiente",
+		"codigo_matricula":"P004","email":"pending@example.test",
+		"telefono_celular":"099000004","contrasenha":"pending-password",
+		"role_acceso":"estudiante","carrera":"Ing. Informática"
+	}`, "")
+	if registration.Code != http.StatusCreated {
+		t.Fatalf("registration status = %d, body = %s", registration.Code, registration.Body.String())
+	}
+	var pendingPassword string
+	if err := db.QueryRow("SELECT CONTRASENHA FROM USUARIOS_PENDIENTES WHERE NRO_CEDULA = 1004").Scan(&pendingPassword); err != nil {
+		t.Fatal(err)
+	}
+	if pendingPassword != "pending-password" {
+		t.Fatalf("pending password = %q, want visible password", pendingPassword)
+	}
+	loginBeforeApproval := realizarPeticionDePrueba(handler, http.MethodPost, "/api/auth/login", "",
+		`{"nro_cedula":"1004","contrasenha":"pending-password"}`, "")
+	if loginBeforeApproval.Code != http.StatusUnauthorized {
+		t.Fatalf("pending user login status = %d, want 401", loginBeforeApproval.Code)
+	}
+
+	pendingResponse := realizarPeticionDePrueba(handler, http.MethodGet, "/api/usuarios/pendientes", admin.Token, "", "")
+	if pendingResponse.Code != http.StatusOK || strings.Contains(pendingResponse.Body.String(), "contrasenha") ||
+		!strings.Contains(pendingResponse.Body.String(), `"estado":"PENDIENTE"`) {
+		t.Fatalf("pending user list = %d, %s", pendingResponse.Code, pendingResponse.Body.String())
+	}
+	var pending []struct {
+		ID int `json:"id"`
+	}
+	if err := json.Unmarshal(pendingResponse.Body.Bytes(), &pending); err != nil || len(pending) != 1 {
+		t.Fatalf("invalid pending user list: %v", err)
+	}
+	reject := realizarPeticionDePrueba(handler, http.MethodPatch, "/api/usuarios/pendientes/"+numeroComoTextoJSON(int64(pending[0].ID))+"/estado",
+		admin.Token, `{"estado":"RECHAZADO"}`, "")
+	if reject.Code != http.StatusNoContent {
+		t.Fatalf("reject pending user status = %d, %s", reject.Code, reject.Body.String())
+	}
+	loginRejected := realizarPeticionDePrueba(handler, http.MethodPost, "/api/auth/login", "",
+		`{"nro_cedula":"1004","contrasenha":"pending-password"}`, "")
+	if loginRejected.Code != http.StatusUnauthorized {
+		t.Fatalf("rejected user login status = %d, want 401", loginRejected.Code)
+	}
+	reopen := realizarPeticionDePrueba(handler, http.MethodPatch, "/api/usuarios/pendientes/"+numeroComoTextoJSON(int64(pending[0].ID))+"/estado",
+		admin.Token, `{"estado":"PENDIENTE"}`, "")
+	if reopen.Code != http.StatusNoContent {
+		t.Fatalf("reopen pending user status = %d, %s", reopen.Code, reopen.Body.String())
+	}
+	approve := realizarPeticionDePrueba(handler, http.MethodPatch, "/api/usuarios/pendientes/"+numeroComoTextoJSON(int64(pending[0].ID))+"/estado",
+		admin.Token, `{"estado":"APROBADO"}`, "")
+	if approve.Code != http.StatusNoContent {
+		t.Fatalf("approve pending user status = %d, %s", approve.Code, approve.Body.String())
+	}
+	var approvedPassword string
+	if err := db.QueryRow("SELECT CONTRASENHA FROM USUARIOS WHERE NRO_CEDULA = 1004").Scan(&approvedPassword); err != nil {
+		t.Fatal(err)
+	}
+	if approvedPassword != "pending-password" {
+		t.Fatalf("approved password = %q, want visible password", approvedPassword)
+	}
+	approvedLogin := realizarPeticionDePrueba(handler, http.MethodPost, "/api/auth/login", "",
+		`{"nro_cedula":"1004","contrasenha":"pending-password"}`, "")
+	if approvedLogin.Code != http.StatusOK {
+		t.Fatalf("approved user login status = %d, %s", approvedLogin.Code, approvedLogin.Body.String())
+	}
+	users := realizarPeticionDePrueba(handler, http.MethodGet, "/api/usuarios", admin.Token, "", "")
+	if users.Code != http.StatusOK || strings.Contains(users.Body.String(), "contrasenha") {
+		t.Fatalf("user list status = %d, %s", users.Code, users.Body.String())
+	}
+
+	create := realizarPeticionDePrueba(handler, http.MethodPost, "/api/usuarios", admin.Token, `{
+		"nro_cedula":"1005","nombres":"Usuario","apellidos":"Administrativo",
+		"codigo_matricula":"A005","email":"admin-user@example.test",
+		"telefono_celular":"099000005","contrasenha":"created-password",
+		"role_acceso":"dir_carrera","carrera":"Ing. Informática","activo":1
+	}`, "")
+	if create.Code != http.StatusCreated || strings.Contains(create.Body.String(), "contrasenha") {
+		t.Fatalf("create user status = %d, %s", create.Code, create.Body.String())
+	}
+	var createdPassword string
+	if err := db.QueryRow("SELECT CONTRASENHA FROM USUARIOS WHERE NRO_CEDULA = 1005").Scan(&createdPassword); err != nil {
+		t.Fatal(err)
+	}
+	if createdPassword != "created-password" {
+		t.Fatalf("created password = %q, want visible password", createdPassword)
+	}
+	var created struct {
+		ID int `json:"id_usuario"`
+	}
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil || created.ID == 0 {
+		t.Fatalf("invalid created user response: %v", err)
+	}
+	careerAdminLogin := realizarPeticionDePrueba(handler, http.MethodPost, "/api/auth/login", "",
+		`{"nro_cedula":"1005","contrasenha":"created-password"}`, "")
+	var careerAdmin struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(careerAdminLogin.Body.Bytes(), &careerAdmin); err != nil || careerAdmin.Token == "" {
+		t.Fatalf("could not log in dir_carrera: %v", err)
+	}
+	careerAdminAccess := realizarPeticionDePrueba(handler, http.MethodGet, "/api/usuarios", careerAdmin.Token, "", "")
+	if careerAdminAccess.Code != http.StatusOK {
+		t.Fatalf("dir_carrera user list status = %d, want 200", careerAdminAccess.Code)
+	}
+	update := realizarPeticionDePrueba(handler, http.MethodPut, "/api/usuarios/"+numeroComoTextoJSON(int64(created.ID)),
+		admin.Token, `{
+			"nro_cedula":"1005","nombres":"Usuario Editado","apellidos":"Administrativo",
+			"codigo_matricula":"A005","email":"admin-user@example.test",
+			"telefono_celular":"099000005","role_acceso":"dir_carrera",
+			"carrera":"Ing. Informática","activo":1
+		}`, "")
+	if update.Code != http.StatusOK || !strings.Contains(update.Body.String(), "Usuario Editado") {
+		t.Fatalf("update user status = %d, %s", update.Code, update.Body.String())
+	}
+	updatePassword := realizarPeticionDePrueba(handler, http.MethodPut, "/api/usuarios/"+numeroComoTextoJSON(int64(created.ID)),
+		admin.Token, `{
+			"nro_cedula":"1005","nombres":"Usuario Editado","apellidos":"Administrativo",
+			"codigo_matricula":"A005","email":"admin-user@example.test",
+			"telefono_celular":"099000005","contrasenha":"updated-password",
+			"role_acceso":"dir_carrera","carrera":"Ing. Informática","activo":1
+		}`, "")
+	if updatePassword.Code != http.StatusOK {
+		t.Fatalf("update user password status = %d, %s", updatePassword.Code, updatePassword.Body.String())
+	}
+	if err := db.QueryRow("SELECT CONTRASENHA FROM USUARIOS WHERE ID_USUARIO = ?", created.ID).Scan(&createdPassword); err != nil {
+		t.Fatal(err)
+	}
+	if createdPassword != "updated-password" {
+		t.Fatalf("updated password = %q, want visible password", createdPassword)
+	}
+	activeDelete := realizarPeticionDePrueba(handler, http.MethodDelete, "/api/usuarios/"+numeroComoTextoJSON(int64(created.ID)), admin.Token, "", "")
+	if activeDelete.Code != http.StatusConflict {
+		t.Fatalf("active user delete status = %d, want 409", activeDelete.Code)
+	}
+	inactivate := realizarPeticionDePrueba(handler, http.MethodPut, "/api/usuarios/"+numeroComoTextoJSON(int64(created.ID)),
+		admin.Token, `{
+			"nro_cedula":"1005","nombres":"Usuario Editado","apellidos":"Administrativo",
+			"codigo_matricula":"A005","email":"admin-user@example.test",
+			"telefono_celular":"099000005","role_acceso":"dir_carrera",
+			"carrera":"Ing. Informática","activo":0
+		}`, "")
+	if inactivate.Code != http.StatusOK {
+		t.Fatalf("inactivate user status = %d, %s", inactivate.Code, inactivate.Body.String())
+	}
+	deleteInactive := realizarPeticionDePrueba(handler, http.MethodDelete, "/api/usuarios/"+numeroComoTextoJSON(int64(created.ID)), admin.Token, "", "")
+	if deleteInactive.Code != http.StatusNoContent {
+		t.Fatalf("inactive user delete status = %d, %s", deleteInactive.Code, deleteInactive.Body.String())
+	}
+}
+
+func crearBaseDeDatosDePrueba(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := services.OpenDB(t.Context(), filepath.Join(t.TempDir(), "test.db"))
+	db, err := services.AbrirBaseDeDatos(t.Context(), filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +427,7 @@ func testDB(t *testing.T) *sql.DB {
 			 TELEFONO_CELULAR, CONTRASENHA, ROLE_ACCESO, CARRERA, FECHA_ALTA, ACTIVO)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '2026-01-01', 1)`,
 			user.id, user.nationalID, user.name, user.surname, user.studentID, user.email,
-			user.phone, user.password, user.role, user.career,
+			user.phone, contrasenaAlmacenadaDePrueba(user.id, user.password), user.role, user.career,
 		); err != nil {
 			t.Fatal(err)
 		}
@@ -236,13 +435,33 @@ func testDB(t *testing.T) *sql.DB {
 	if _, err := db.Exec("INSERT INTO ACTIVIDADES VALUES (2, 'Cursos o Talleres', 1)"); err != nil {
 		t.Fatal(err)
 	}
-	if err := services.ValidateSchema(t.Context(), db); err != nil {
+	if err := services.ValidarEsquema(t.Context(), db); err != nil {
+		t.Fatal(err)
+	}
+	if err := services.AsegurarEsquemaGestionUsuarios(t.Context(), db); err != nil {
 		t.Fatal(err)
 	}
 	return db
 }
 
-func call(handler http.Handler, method, path, token, body, origin string) *httptest.ResponseRecorder {
+func contrasenaAlmacenadaDePrueba(userID int, password string) string {
+	if userID != 1 {
+		return password
+	}
+	salt := []byte("legacy-salt-1234")
+	key, err := pbkdf2.Key(sha256.New, password, salt, 100_000, 32)
+	if err != nil {
+		panic(err)
+	}
+	return strings.Join([]string{
+		"pbkdf2-sha256",
+		"100000",
+		base64.RawStdEncoding.EncodeToString(salt),
+		base64.RawStdEncoding.EncodeToString(key),
+	}, "$")
+}
+
+func realizarPeticionDePrueba(handler http.Handler, method, path, token, body, origin string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(method, path, strings.NewReader(body))
 	if body != "" {
 		request.Header.Set("Content-Type", "application/json")
@@ -258,6 +477,6 @@ func call(handler http.Handler, method, path, token, body, origin string) *httpt
 	return response
 }
 
-func jsonNumber(value int64) string {
+func numeroComoTextoJSON(value int64) string {
 	return strconv.FormatInt(value, 10)
 }
